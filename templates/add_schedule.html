@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Заполнить расписание</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- Подключение Bootstrap -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body>
+  <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+    <div class="container">
+      <a class="navbar-brand" href="{{ url_for('dashboard') }}">Панель деканата</a>
+      <div class="collapse navbar-collapse">
+        <ul class="navbar-nav ms-auto">
+          <li class="nav-item">
+            <a class="nav-link" href="{{ url_for('create_event') }}">Создать событие</a>
+          </li>
+          <li class="nav-item">
+            <a class="nav-link" href="{{ url_for('login') }}">Выйти</a>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </nav>
+  <div class="container mt-5">
+    <h1>Заполнить расписание</h1>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div class="alert alert-info">
+          {% for category, message in messages %}
+            <div>{{ message }}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+    <form method="post">
+      <div class="mb-3">
+        <label for="direction" class="form-label">Направление</label>
+        <input type="text" class="form-control" id="direction" name="direction" placeholder="Например, ПИ, ПРИ, БИ" required>
+      </div>
+      <div class="mb-3">
+        <label for="group_number" class="form-label">Номер группы</label>
+        <input type="text" class="form-control" id="group_number" name="group_number" placeholder="Например, 201" required>
+      </div>
+      <div class="mb-3">
+        <label for="week_type" class="form-label">Тип недели</label>
+        <select class="form-select" id="week_type" name="week_type" required>
+          <option value="">Выберите тип недели</option>
+          <option value="Четная">Четная</option>
+          <option value="Нечетная">Нечетная</option>
+        </select>
+      </div>
+      <div class="mb-3">
+        <label for="day_of_week" class="form-label">День недели</label>
+        <select class="form-select" id="day_of_week" name="day_of_week" required>
+          <option value="">Выберите день</option>
+          <option value="Понедельник">Понедельник</option>
+          <option value="Вторник">Вторник</option>
+          <option value="Среда">Среда</option>
+          <option value="Четверг">Четверг</option>
+          <option value="Пятница">Пятница</option>
+          <option value="Суббота">Суббота</option>
+        </select>
+      </div>
+      <hr>
+      <h3>Пары</h3>
+      <p class="text-muted">Если пары нет, оставьте поля пустыми.</p>
+      <div class="row">
+        {% for i, pair in enumerate(pairs_info) %}
+          <div class="col-12 col-md-6 mb-3">
+            <h5>Пара {{ i+1 }} ({{ pair[0] }} - {{ pair[1] }})</h5>
+            <label class="form-label">Предмет</label>
+            <input type="text" class="form-control mb-2" name="subject_{{ i }}" placeholder="Название предмета">
+
+            <label class="form-label">Тип занятия</label>
+            <select class="form-select mb-2" name="type_{{ i }}">
+              <option value="">Не выбрано</option>
+              <option value="Лекция">Лекция</option>
+              <option value="Практика">Практика</option>
+              <option value="Лабораторная">Лабораторная</option>
+            </select>
+
+            <label class="form-label">Преподаватель</label>
+            <input type="text" class="form-control mb-2" name="teacher_{{ i }}" placeholder="ФИО преподавателя">
+
+            <label class="form-label">Аудитория</label>
+            <input type="text" class="form-control" name="room_{{ i }}" placeholder="Номер аудитории">
+          </div>
+        {% endfor %}
+      </div>
+      <button type="submit" class="btn btn-primary">Добавить расписание</button>
+    </form>
+  </div>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
