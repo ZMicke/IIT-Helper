@@ -3,6 +3,7 @@ import re
 import logging
 import asyncio
 import psycopg2
+import requests  # Для работы с OLLAMA API
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
 
@@ -60,7 +61,7 @@ def get_schedule_text(direction: str, group_number: str, week_type: str, day_of_
     row = cur.fetchone()
     conn.close()
     if row:
-        # Заменяем <br> на \n, чтобы Telegram корректно обрабатывал переносы строк
+        # Если в базе сохранены <br>, заменяем их на \n для корректного отображения в Telegram
         return row["schedule_text"].replace("<br>", "\n")
     return None
 
@@ -68,6 +69,35 @@ def get_schedule_text(direction: str, group_number: str, week_type: str, day_of_
 class ScheduleFSM(StatesGroup):
     waiting_for_week_type = State()
     waiting_for_day = State()
+
+# ---------- Главный меню ----------
+@router.message(Command("start"))
+async def start_command(message: types.Message):
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Расписание", callback_data="menu:schedule")
+    builder.button(text="Задать вопрос", callback_data="menu:ask")
+    builder.button(text="Создать заявку", callback_data="menu:meeting")
+    builder.button(text="Отправить письмо", callback_data="menu:mail")
+    builder.button(text="Личные зачеты", callback_data="menu:credits")
+    builder.adjust(2)
+    await message.answer("Выберите функционал:", reply_markup=builder.as_markup())
+
+@router.callback_query(F.data.startswith("menu:"))
+async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
+    option = callback.data.split(":")[1]
+    if option == "schedule":
+        # Переходим к просмотру расписания
+        await callback.message.answer("Переходим к просмотру расписания...\nВведите команду /schedule, чтобы начать.")
+        # Здесь можно вызвать команду /schedule автоматически или просто отправить инструкцию.
+    elif option == "ask":
+        await callback.message.answer("Чтобы задать вопрос к LLM, используйте команду /ask <ваш вопрос>")
+    elif option == "meeting":
+        await callback.message.answer("Чтобы создать заявку на встречу или помощь, используйте команду /meeting")
+    elif option == "mail":
+        await callback.message.answer("Чтобы отправить письмо методисту, используйте команду /mail")
+    elif option == "credits":
+        await callback.message.answer("Чтобы проверить личные зачеты, используйте команду /credits")
+    await callback.answer()
 
 # ---------- Обработчики команды /schedule ----------
 @router.message(Command("schedule"))
@@ -134,14 +164,12 @@ async def day_callback(callback: types.CallbackQuery, state: FSMContext):
                 f"{schedule_text}")
     else:
         text = f"Расписание для {direction}-{group_number} ({week_type} неделя) на {day} не найдено."
-
-    # Формируем клавиатуру с кнопками "Назад" и "Завершить"
+    # Клавиатура с кнопками "Назад" и "Завершить"
     builder = InlineKeyboardBuilder()
     builder.button(text="Назад", callback_data="back:day")
     builder.button(text="Завершить", callback_data="done")
     builder.adjust(2)
     await callback.message.edit_text(text, reply_markup=builder.as_markup(), parse_mode="HTML")
-    # Оставляем состояние, чтобы можно было вернуться назад
     await state.set_state(ScheduleFSM.waiting_for_day)
     await callback.answer()
 
@@ -150,7 +178,6 @@ async def back_callback(callback: types.CallbackQuery, state: FSMContext):
     command = callback.data.split(":")[1]
     data = await state.get_data()
     if command == "week":
-        # Возвращаемся к выбору типа недели
         builder = InlineKeyboardBuilder()
         for wt in ["Четная", "Нечетная"]:
             builder.button(text=wt, callback_data=f"week:{wt}")
@@ -158,7 +185,6 @@ async def back_callback(callback: types.CallbackQuery, state: FSMContext):
         await callback.message.edit_text("Выберите тип недели:", reply_markup=builder.as_markup())
         await state.set_state(ScheduleFSM.waiting_for_week_type)
     elif command == "day":
-        # Возвращаемся к выбору дня недели
         week_type = data.get("week_type")
         builder = InlineKeyboardBuilder()
         for day in ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота"]:
@@ -178,7 +204,35 @@ async def done_callback(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_text("Просмотр расписания завершён. Если нужно ещё раз, введите /schedule.")
     await callback.answer()
 
-# Опционально: регистрация студента через бот
+# ---------- Команда /ask для отправки вопроса к OLLAMA (RAG + LLM) ----------
+@router.message(Command("ask"))
+async def ask_command(message: types.Message):
+    query = message.get_args()
+    if not query:
+        await message.answer("Пожалуйста, введите вопрос после команды /ask")
+        return
+    prompt = f"Вопрос: {query}\nОтвет:"
+    answer = ollama_generate(prompt)
+    await message.answer(answer)
+
+# ---------- Функция для генерации ответа через OLLAMA ----------
+def ollama_generate(prompt: str) -> str:
+    url = "http://localhost:11434/api/generate"  # Проверьте, что этот URL корректен
+    payload = {
+        "model": "llama2-7b",
+        "prompt": prompt,
+        "max_tokens": 150,
+        "temperature": 0.7
+    }
+    try:
+        response = requests.post(url, json=payload)
+        response.raise_for_status()
+        data = response.json()
+        return data.get("generated_text", "").strip()
+    except Exception as e:
+        return f"Ошибка генерации ответа: {e}"
+
+# ---------- Обработчик регистрации студента через бот (опционально) ----------
 @router.message()
 async def register_in_bot(message: types.Message):
     parts = message.text.split()
