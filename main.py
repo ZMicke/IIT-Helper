@@ -6,6 +6,8 @@ import psycopg2
 import requests  # Для работы с OLLAMA API
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
+import requests
+from bs4 import BeautifulSoup
 
 from aiogram import Bot, Dispatcher, Router, types, F
 from aiogram.filters import Command
@@ -70,7 +72,10 @@ class ScheduleFSM(StatesGroup):
     waiting_for_week_type = State()
     waiting_for_day = State()
 
-# ---------- Главный меню ----------
+    
+
+## ---------- Главный меню ----------
+
 @router.message(Command("start"))
 async def start_command(message: types.Message):
     builder = InlineKeyboardBuilder()
@@ -80,55 +85,57 @@ async def start_command(message: types.Message):
     builder.button(text="Отправить письмо", callback_data="menu:mail")
     builder.button(text="Личные зачеты", callback_data="menu:credits")
     builder.adjust(2)
-    await message.answer("Выберите функционал:", reply_markup=builder.as_markup())
-
-@router.callback_query(F.data.startswith("menu:"))
-async def menu_handler(callback: types.CallbackQuery, state: FSMContext):
-    option = callback.data.split(":")[1]
-    if option == "schedule":
-        # Переходим к просмотру расписания
-        await callback.message.answer("Переходим к просмотру расписания...\nВведите команду /schedule, чтобы начать.")
-        # Здесь можно вызвать команду /schedule автоматически или просто отправить инструкцию.
-    elif option == "ask":
-        await callback.message.answer("Чтобы задать вопрос к LLM, используйте команду /ask <ваш вопрос>")
-    elif option == "meeting":
-        await callback.message.answer("Чтобы создать заявку на встречу или помощь, используйте команду /meeting")
-    elif option == "mail":
-        await callback.message.answer("Чтобы отправить письмо методисту, используйте команду /mail")
-    elif option == "credits":
-        await callback.message.answer("Чтобы проверить личные зачеты, используйте команду /credits")
-    await callback.answer()
-
-# ---------- Обработчики команды /schedule ----------
-@router.message(Command("schedule"))
-async def cmd_schedule(message: types.Message, state: FSMContext):
+    
+    # Проверка, зарегистрирован ли пользователь
     telegram_id = message.from_user.id
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("SELECT direction, group_number FROM students WHERE telegram_id = %s", (telegram_id,))
     student = cur.fetchone()
     conn.close()
+    
+    # Если пользователь не зарегистрирован, отправляем сообщение с инструкцией
     if not student:
-        await message.answer("Вы не зарегистрированы. Отправьте данные в формате 'Имя Фамилия Группа'")
+        await message.answer("Привет! Пожалуйста, зарегистрируйтесь. Введите данные в формате:\n'Имя Фамилия Группа'\nНапример: Иван Иванов PRI-201")
+    else:
+        # Если пользователь уже зарегистрирован, показываем меню
+        await message.answer("Выберите действие:", reply_markup=builder.as_markup())
+        
+        
+# ---------- Обработчик выбора расписания ----------
+
+@router.callback_query(F.data == "menu:schedule")
+async def menu_schedule_callback(callback: types.CallbackQuery, state: FSMContext):
+    telegram_id = callback.from_user.id
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT direction, group_number FROM students WHERE telegram_id = %s", (telegram_id,))
+    student = cur.fetchone()
+    conn.close()
+
+    # Проверка наличия данных студента в БД
+    if not student:
+        await callback.message.answer("Вы не зарегистрированы. Пожалуйста, зарегистрируйтесь, отправив данные в формате 'Имя Фамилия Группа'.")
         return
+    
     direction = student["direction"]
     group_number = student["group_number"]
-    if not direction or not group_number:
-        await message.answer("Данные вашей группы указаны некорректно. Обратитесь к администратору.")
-        return
-
-    await state.update_data(direction=direction, group_number=group_number)
-
-    # Inline-клавиатура для выбора типа недели
+    
+    # Отправка сообщения с выбором типа недели
     builder = InlineKeyboardBuilder()
-    for wt in ["Четная", "Нечетная"]:
-        builder.button(text=wt, callback_data=f"week:{wt}")
+    for week_type in ["Четная", "Нечетная"]:
+        builder.button(text=week_type, callback_data=f"week:{week_type}")
     builder.adjust(2)
-    await message.answer(
+    
+    await state.update_data(direction=direction, group_number=group_number)
+    
+    await callback.message.answer(
         f"Ваше направление: {direction}, группа: {group_number}\nВыберите тип недели:",
         reply_markup=builder.as_markup()
     )
     await state.set_state(ScheduleFSM.waiting_for_week_type)
+    await callback.answer()
+
 
 @router.callback_query(F.data.startswith("week:"))
 async def week_callback(callback: types.CallbackQuery, state: FSMContext):
@@ -152,11 +159,18 @@ async def week_callback(callback: types.CallbackQuery, state: FSMContext):
 async def day_callback(callback: types.CallbackQuery, state: FSMContext):
     day = callback.data.split(":")[1]
     data = await state.get_data()
+    
+    # Добавляем отладочное сообщение для вывода состояния
+    print(f"State data: {data}")
+    
     direction = data.get("direction")
     group_number = data.get("group_number")
     week_type = data.get("week_type")
+    
+    print(f"State: {data}, day: {day}, direction: {direction}, group_number: {group_number}, week_type: {week_type}")
+    
     if not all([direction, group_number, week_type]):
-        await callback.message.answer("Не удалось определить параметры. Повторите попытку.")
+        await callback.message.answer("Не удалось определить параметры.\nПовторите попытку.")
         return
     schedule_text = get_schedule_text(direction, group_number, week_type, day)
     if schedule_text:
@@ -231,42 +245,59 @@ def ollama_generate(prompt: str) -> str:
         return data.get("generated_text", "").strip()
     except Exception as e:
         return f"Ошибка генерации ответа: {e}"
+    
 
-# ---------- Обработчик регистрации студента через бот (опционально) ----------
+
+# ---------- Регистрация студента через бот ----------
+
 @router.message()
 async def register_in_bot(message: types.Message):
     parts = message.text.split()
+    
+    # Проверка на правильность введенных данных
     if len(parts) == 3:
         first_name, last_name, group_str = parts
         match = re.match(r"([А-ЯЁA-Z]+)-?(\d+)", group_str, re.IGNORECASE)
+        
+        # Обработка данных направления и группы
         if match:
             direction = match.group(1).upper()
             group_number = match.group(2)
         else:
             direction = "OTHER"
             group_number = group_str
+
         telegram_id = message.from_user.id
         try:
+            # Добавляем данные пользователя в базу данных
             conn = get_db_connection()
             cur = conn.cursor()
             cur.execute("""
-                INSERT INTO students (telegram_id, first_name, last_name, group_name, direction, group_number)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                INSERT INTO students (telegram_id, first_name, last_name, direction, group_number)
+                VALUES (%s, %s, %s, %s, %s)
                 ON CONFLICT (telegram_id) DO UPDATE
                 SET first_name = EXCLUDED.first_name,
                     last_name = EXCLUDED.last_name,
-                    group_name = EXCLUDED.group_name,
                     direction = EXCLUDED.direction,
                     group_number = EXCLUDED.group_number;
-            """, (telegram_id, first_name, last_name, group_str, direction, group_number))
+            """, (telegram_id, first_name, last_name, direction, group_number))
             conn.commit()
             conn.close()
-            await message.answer("Регистрация успешно выполнена! Теперь введите /schedule для просмотра расписания.")
+            
+            # Подтверждение успешной регистрации
+            builder = InlineKeyboardBuilder()
+            builder.button(text="Перейти к расписанию", callback_data="menu:schedule")
+            builder.adjust(1)
+            await message.answer(
+                "Регистрация успешно выполнена! Теперь вы можете перейти к просмотру расписания.",
+                reply_markup=builder.as_markup()
+            )
         except Exception as e:
             logging.error(f"Ошибка регистрации: {e}")
             await message.answer("Ошибка регистрации. Попробуйте ещё раз.")
     else:
-        await message.answer("Неверный формат данных. Введите: Имя Фамилия Группа\nИли /schedule для просмотра расписания.")
+        # Инструкция по правильному вводу данных
+        await message.answer("Неверный формат данных. Введите данные в формате:\n'Имя Фамилия Группа'")
 
 router.message.register(register_in_bot)
 dp.include_router(router)
