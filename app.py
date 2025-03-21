@@ -42,7 +42,6 @@ def init_db():
                 telegram_id BIGINT UNIQUE,
                 first_name TEXT,
                 last_name TEXT,
-                group_name TEXT,
                 direction TEXT,
                 group_number TEXT
             )
