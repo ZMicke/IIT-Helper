@@ -16,6 +16,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
 app = Flask(__name__)
 app.secret_key = FLASK_SECRET_KEY
 
+
 # -------------------- Функции подключения к базам данных --------------------
 
 def get_db_connection():
